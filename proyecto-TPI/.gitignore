@@ -7,12 +7,13 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencias y Builds
 node_modules
 dist
 dist-ssr
 *.local
 
-# Editor directories and files
+# Archivos de editores e IDEs
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -28,3 +29,8 @@ dist-ssr
 *~
 .~*.kra
 *.autosave
+
+# Archivos temporales y respaldos automáticos de LDtk
+*_backup.ldtk
+ldtk_backups/
+*.ldtk~
