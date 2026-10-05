@@ -1,0 +1,36 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencias y Builds
+node_modules
+dist
+dist-ssr
+*.local
+
+# Archivos de editores e IDEs
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Archivos temporales y respaldos de Krita
+*.kra~
+*~
+.~*.kra
+*.autosave
+
+# Archivos temporales y respaldos automáticos de LDtk
+*_backup.ldtk
+ldtk_backups/
+*.ldtk~
