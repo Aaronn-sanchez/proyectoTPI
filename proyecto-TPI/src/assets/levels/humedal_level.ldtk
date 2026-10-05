@@ -103,7 +103,7 @@
 			"uiFilterTags": [],
 			"useAsyncRender": false,
 			"intGridValues": [
-				{ "value": 1, "identifier": "suelo", "color": "#D77643", "tile": null, "groupUid": 0 },
+				{ "value": 1, "identifier": "suelo", "color": "#63C74D", "tile": null, "groupUid": 0 },
 				{ "value": 2, "identifier": "agua", "color": "#258E95", "tile": null, "groupUid": 0 }
 			],
 			"intGridValuesGroups": [],
@@ -279,7 +279,7 @@
 					"entityInstances": [
 						{
 							"__identifier": "Spawn_carpincho",
-							"__grid": [13,32],
+							"__grid": [11,33],
 							"__pivot": [0,0],
 							"__tags": [],
 							"__tile": { "tilesetUid": 13, "x": 0, "y": 0, "w": 140, "h": 140 },
@@ -288,10 +288,10 @@
 							"width": 32,
 							"height": 32,
 							"defUid": 12,
-							"px": [208,512],
+							"px": [176,528],
 							"fieldInstances": [],
-							"__worldX": 208,
-							"__worldY": 512
+							"__worldX": 176,
+							"__worldY": 528
 						}
 					]
 				},
