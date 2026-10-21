@@ -51,7 +51,7 @@ export default class Agua {
 
         // ---------- Apariencia ----------
         this.colorAgua = 0x3fa9e0;
-        this.alphaAgua = 0.3;
+        this.alphaAgua = 0.5;
 
         // Grilla de agua: 1 = hay agua en esa celda
         this.esAgua = new Uint8Array(columnas * filas);
