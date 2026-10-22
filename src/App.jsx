@@ -21,7 +21,7 @@ export default function App() {
         default: 'arcade',
         arcade: {
           gravity: { y: 800 },
-          debug: true
+          debug: false
         }
       },
       scale: {
