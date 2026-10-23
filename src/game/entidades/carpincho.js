@@ -1,29 +1,96 @@
+import Phaser from "phaser";
+
 export function iniciarCarpincho(personaje) {
     personaje.peso = true;
-    personaje.velocidadTierra = 160;
+    personaje.velocidadTierra = 4.5;
+    personaje.fuerzaSalto = -8.5;
 
-    // ---------- Parámetros de AGUA ----------
-    // Relación densidad_agua / densidad_carpincho. > 1 = flota (los carpinchos
-    // reales flotan). Con 1.12 queda ~89% sumergido en reposo.
+    // Parámetros de agua
     personaje.flotabilidad = 1.12;
-    // Aceleraciones (px/s²) de las patas. La velocidad máxima NO está escrita en
-    // ningún lado: sale de equilibrar esta aceleración con el arrastre del agua.
-    personaje.aceleracionNado = 370;     // horizontal -> ~135 px/s
-    personaje.aceleracionBuceo = 520;    // hacia abajo, vence a la flotabilidad
-    personaje.aceleracionEmerger = 460;  // hacia arriba
-    personaje.impulsoTrepar = 240;       // px/s al trepar la orilla
-    personaje.umbralNado = 0.5;          // desde qué % sumergido pasa de caminar a nadar
-    personaje.sumersion = 0;             // 0 a 1, lo escribe Agua cada frame
+    personaje.aceleracionNado = 0.25;
+    personaje.aceleracionBuceo = 0.35;
+    personaje.aceleracionEmerger = 0.30;
+    personaje.umbralNado = 0.5;
+    personaje.sumersion = 0;
 
-    // Tamaño visual en pantalla
+    // Cantidad de superficies sólidas que toca el sensor de los pies en este paso
+    personaje.contactosSuelo = 0;
+
+    // Tamaño visual
     personaje.setDisplaySize(48, 48);
-    // Hitbox calculada sobre las dimensiones reales del PNG (centrada sobre las patas)
-    personaje.body.setSize(personaje.width * 0.65, personaje.height * 0.65);
-    personaje.body.setOffset(personaje.width * 0.12, personaje.height * 0.30);
+
+    // ==========================================================
+    // CUERPO COMPUESTO: hitbox + SENSOR DE SUELO en los pies
+    // ==========================================================
+    const Matter = Phaser.Physics.Matter.Matter;
+    const x = personaje.x;
+    const y = personaje.y;
+    const ancho = 34;
+    const alto = 30;
+
+    // Parte 1: el cuerpo sólido con esquinas redondeadas (igual que antes).
+    const cuerpoPrincipal = Matter.Bodies.rectangle(x, y, ancho, alto, {
+        chamfer: { radius: 8 },
+        friction: 0.08,
+        restitution: 0.0
+    });
+
+    // Parte 2: sensor fino pegado a la base. No choca con nada (isSensor), solo
+    // avisa si toca algo. Es más angosto que el cuerpo (20 vs 34) para que las
+    // paredes laterales jamás lo toquen. Sobresale 3 px por debajo de los pies.
+    const sensorSuelo = Matter.Bodies.rectangle(x, y + alto / 2 + 1, 20, 4, {
+        isSensor: true,
+        label: 'sensorSuelo',
+        density: 0.0001   // casi sin masa: no desplaza el centro del cuerpo
+    });
+
+    const compuesto = Matter.Body.create({
+        parts: [cuerpoPrincipal, sensorSuelo],
+        // friction: 0.08,
+        // frictionAir: 0.02,  
+        restitution: 0.0
+    });
+
+    personaje.setExistingBody(compuesto);
+    personaje.setOrigin(0.5, 0.5);
+    personaje.setFixedRotation();
+    personaje.setPosition(x, y);
+
+    // ==========================================================
+    // DETECCIÓN DE SUELO por eventos de colisión
+    // ==========================================================
+    const mundo = personaje.scene.matter.world;
+
+    // Antes de cada paso de física: reiniciar el conteo.
+    const reiniciarContactos = () => { personaje.contactosSuelo = 0; };
+
+    // Durante el paso: contar cada par donde participa el sensor.
+    const contarContactos = (evento) => {
+        for (const par of evento.pairs) {
+            let otro;
+            if (par.bodyA === sensorSuelo) otro = par.bodyB;
+            else if (par.bodyB === sensorSuelo) otro = par.bodyA;
+            else continue;
+
+            if (otro.isSensor) continue;               // ignorar otros sensores
+            if (otro.parent === compuesto) continue;   // ignorar el propio carpincho
+            personaje.contactosSuelo++;
+        }
+    };
+
+    mundo.on('beforeupdate', reiniciarContactos);
+    mundo.on('collisionstart', contarContactos);
+    mundo.on('collisionactive', contarContactos);
+
+    // Limpieza: si el carpincho se destruye (o se reinicia la escena), soltar los
+    // listeners para que no queden escuchando un cuerpo que ya no existe.
+    personaje.once('destroy', () => {
+        mundo.off('beforeupdate', reiniciarContactos);
+        mundo.off('collisionstart', contarContactos);
+        mundo.off('collisionactive', contarContactos);
+    });
 
     personaje.mover = function (teclas, teclasWASD, delta) {
-        const dt = Math.min(delta / 1000, 1 / 30);
-
         const izq = teclas.left.isDown || teclasWASD.A.isDown;
         const der = teclas.right.isDown || teclasWASD.D.isDown;
         const arriba = teclas.up.isDown || teclasWASD.W.isDown || teclasWASD.SPACE.isDown;
@@ -32,38 +99,21 @@ export function iniciarCarpincho(personaje) {
         const s = this.sumersion;
 
         if (s >= this.umbralNado) {
-            // ==========================================
-            // NADANDO (>= 50% del cuerpo en el agua)
-            // ==========================================
-            // Las patas aplican ACELERACIÓN, no velocidad directa: así hay inercia
-            // y el arrastre (en Agua.afectarCuerpo) decide la velocidad máxima.
-
-            // Horizontal
+            // NADANDO EN EL AGUA
             const dir = (der ? 1 : 0) - (izq ? 1 : 0);
             if (dir !== 0) {
-                this.body.velocity.x += dir * this.aceleracionNado * dt;
+                this.setVelocityX(this.body.velocity.x + dir * this.aceleracionNado);
                 this.setFlipX(dir < 0);
             }
 
-            // Vertical
             if (abajo) {
-                // Buceo: patas hacia abajo, más fuerte que el empuje de flotación.
-                this.body.velocity.y += this.aceleracionBuceo * dt;
+                this.setVelocityY(this.body.velocity.y + this.aceleracionBuceo);
             } else if (arriba) {
-                // Emerger: la fuerza de las patas se apaga al asomar el cuerpo
-                // (sin agua que empujar no hay propulsión): plena con s >= 0.9,
-                // nula con s <= 0.5. Así no puede "volar" sobre el agua.
                 const empuje = Math.max(0, Math.min(1, (s - 0.5) / 0.4));
-                this.body.velocity.y -= this.aceleracionEmerger * empuje * dt;
+                this.setVelocityY(this.body.velocity.y - this.aceleracionEmerger * empuje);
             }
-            // Sin teclas verticales: no hacemos nada. Flotación y frenado
-            // los resuelve Agua por física.
-
         } else {
-            // ==========================================
-            // EN TIERRA O VADEANDO (< 50% en el agua)
-            // ==========================================
-            // Al vadear, el agua frena: hasta -45% de velocidad a casi 50% de sumersión.
+            // EN TIERRA O VADEANDO SOBRE CURVAS / RAMPAS
             const factor = 1 - 0.45 * s;
 
             if (izq) {
@@ -76,25 +126,16 @@ export function iniciarCarpincho(personaje) {
                 this.setVelocityX(0);
             }
 
-            // Salto solo si está apoyado sobre suelo sólido
-            const enSuelo = this.body.blocked.down || this.body.touching.down;
+            // Salto: solo si el sensor de los pies está tocando algo sólido.
+            const enSuelo = this.contactosSuelo > 0;
             if (arriba && enSuelo) {
-                this.setVelocityY(-330);
-            }
-        }
-
-        // ==========================================
-        // TREPAR LA ORILLA
-        // ==========================================
-        // Si está tocando agua (0 < s < 0.9), apretando contra una pared y
-        // pidiendo subir, las patas se agarran del barro y lo impulsan hacia
-        // arriba. Cuando sale del agua (s = 0) el impulso se corta y la inercia
-        // lo termina de subir al borde.
-        const contraPared = this.body.blocked.left || this.body.blocked.right;
-        if (arriba && contraPared && s > 0 && s < 0.9) {
-            if (this.body.velocity.y > -this.impulsoTrepar) {
-                this.setVelocityY(-this.impulsoTrepar);
+                this.setVelocityY(this.fuerzaSalto);
             }
         }
     };
+
+    console.log('sprite', personaje.x, personaje.y);
+    console.log('body', personaje.body.position.x, personaje.body.position.y);
+    console.log('origen', personaje.originX, personaje.originY);
+    console.log('tamaño textura', personaje.width, personaje.height);
 }

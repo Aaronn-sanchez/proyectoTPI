@@ -18,10 +18,10 @@ export default function App() {
       height: 540,
       parent: contenedorJuego.current,
       physics: {
-        default: 'arcade',
-        arcade: {
-          gravity: { y: 800 },
-          debug: false
+        default: 'matter',
+        matter: {
+          gravity: { y: 1.2 },
+          debug: true
         }
       },
       scale: {

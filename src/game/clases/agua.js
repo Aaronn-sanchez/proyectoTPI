@@ -1,29 +1,23 @@
 import Phaser from "phaser";
 
 /**
- * AGUA
- * ----
- * Maneja TODO lo relacionado al agua de un nivel:
- *   1. Saber cuánto de un cuerpo está sumergido (0 a 1).
- *   2. Aplicar flotabilidad (Arquímedes) y arrastre (resistencia del fluido).
- *   3. Simular y dibujar la superficie como una ola real (resortes acoplados).
- *   4. Disparar salpicaduras al entrar/salir.
- *
- *
- * DECISIÓN DE DISEÑO: el agua NO usa cuerpos físicos de Arcade. Arcade solo
- * sabe de colisiones rígidas (rebotar/frenar). El agua no frena en seco: aplica
- * FUERZAS continuas. Por eso guardamos las celdas en una grilla y medimos
- * nosotros cuánto se mete cada cuerpo.
+ * AGUA (Adaptada para Matter.js)
+ * --------------------------------
+ * Maneja:
+ *   1. Detección continua de sumersión sobre cuerpos Matter.js.
+ *   2. Fuerzas de flotabilidad (Arquímedes) y arrastre hidrodinámico por applyForce.
+ *   3. Simulación y dibujo de la superficie de olas con resortes acoplados.
+ *   4. Disparo de salpicaduras de partículas al entrar y salir.
  */
 export default class Agua {
     constructor(escena, opciones) {
         const {
-            intGrid,          // array plano de LDtk (intGridCsv)
-            columnas,         // __cWid
-            filas,            // __cHei
-            tamCelda,         // __gridSize (16)
-            valorAgua = 2,    // valor del IntGrid que representa agua
-            profundidad = 5   // depth visual del agua (delante del carpincho)
+            intGrid,
+            columnas,
+            filas,
+            tamCelda,
+            valorAgua = 2,
+            profundidad = 5
         } = opciones;
 
         this.escena = escena;
@@ -31,29 +25,23 @@ export default class Agua {
         this.columnas = columnas;
         this.filas = filas;
 
-        // ---------- Parámetros de FLUIDO (ajustables) ----------
-        // Arrastre = resistencia del agua. Se usa una parte lineal (viscosidad,
-        // domina a baja velocidad) y una cuadrática (domina a alta velocidad:
-        // por eso un zambullido fuerte se frena mucho más rápido que un nado lento).
-        this.arrastreLineal = 2.2;        // 1/s
-        this.arrastreCuadratico = 0.004;  // 1/px
-        // El agua frena más en vertical (el lomo/panza presentan más superficie
-        // y además evita que el cuerpo rebote eternamente al flotar).
-        this.factorArrastreVertical = 1.8;
+        // ---------- Parámetros de FLUIDO ----------
+        this.arrastreLineal = 1.8;
+        this.factorArrastreVertical = 1.5;
 
-        // ---------- Parámetros de OLAS (ajustables) ----------
-        this.paso = 4;               // px entre muestras de la superficie
-        this.tension = 0.025;        // qué tan fuerte vuelve cada punto a su reposo
-        this.amortiguacion = 0.025;  // cuánto se apagan las ondas
-        this.propagacion = 0.25;     // cuánto se contagia el movimiento a vecinos
-        this.pasadasPropagacion = 8; // repeticiones del contagio por tick
-        this.limiteAmplitud = 12;    // px máximos de desplazamiento (seguridad)
+        // ---------- Parámetros de OLAS ----------
+        this.paso = 4;
+        this.tension = 0.025;
+        this.amortiguacion = 0.025;
+        this.propagacion = 0.25;
+        this.pasadasPropagacion = 8;
+        this.limiteAmplitud = 12;
 
         // ---------- Apariencia ----------
         this.colorAgua = 0x3fa9e0;
         this.alphaAgua = 0.5;
 
-        // Grilla de agua: 1 = hay agua en esa celda
+        // Grilla lógica de agua
         this.esAgua = new Uint8Array(columnas * filas);
         for (let i = 0; i < intGrid.length; i++) {
             if (intGrid[i] === valorAgua) this.esAgua[i] = 1;
@@ -64,13 +52,9 @@ export default class Agua {
         this.grafico = escena.add.graphics().setDepth(profundidad);
         this._crearSalpicadura(profundidad + 5);
 
-        // Acumulador para simular las olas a paso fijo (60 Hz)
         this.acumulador = 0;
     }
 
-    // =====================================================
-    // GEOMETRÍA: suavizado de superficie Y fondo
-    // =====================================================
     _construirGeometria() {
         const tam = this.tam;
         this.corridas = [];
@@ -107,7 +91,7 @@ export default class Agua {
         this.velocidad = new Float32Array(this.n);
         this.activo = new Uint8Array(this.n);
         this.base = new Float32Array(this.n);
-        this.fondo = new Float32Array(this.n); // 👈 Y del fondo en cada tira
+        this.fondo = new Float32Array(this.n);
         this.colTira = new Int32Array(this.n);
 
         for (let i = 0; i < this.n; i++) {
@@ -124,7 +108,7 @@ export default class Agua {
         this.dIzq = new Float32Array(this.n);
         this.dDer = new Float32Array(this.n);
         this.alturaVertice = new Float32Array(this.n + 1);
-        this.fondoVertice = new Float32Array(this.n + 1); // 👈 Suavizado del lecho
+        this.fondoVertice = new Float32Array(this.n + 1);
         this.cimaIzq = new Float32Array(this.n);
         this.cimaDer = new Float32Array(this.n);
     }
@@ -134,35 +118,24 @@ export default class Agua {
         return this.esAgua[f * this.columnas + c] === 1;
     }
 
-    // =====================================================
-    // SALPICADURA (partículas)
-    // =====================================================
     _crearSalpicadura(profundidad) {
-        // Usa la textura 'gota' creada en el preload de la escena.
         this.salpicadura = this.escena.add.particles(0, 0, 'gota', {
-            speed: { min: 140, max: 280 },       // Mayor impulso
-            angle: { min: 210, max: 330 },       // Abanico abierto (hacia los lados y arriba)
-            gravityY: 650,                      // Caen con peso realista
-            lifespan: { min: 400, max: 700 },    // Viven más tiempo en el aire
-            scale: { start: 1.2, end: 0.1 },     // Gotas de distintos tamaños
+            speed: { min: 140, max: 280 },
+            angle: { min: 210, max: 330 },
+            gravityY: 650,
+            lifespan: { min: 400, max: 700 },
+            scale: { start: 1.2, end: 0.1 },
             alpha: { start: 0.9, end: 0 },
-            tint: [0xffffff, 0x48cae4, 0x90e0ef], // Variación entre blanco y celestes
+            tint: [0xffffff, 0x48cae4, 0x90e0ef],
             emitting: false
         }).setDepth(profundidad);
     }
 
     salpicar(x, y, intensidad) {
-        // intensidad = velocidad vertical del impacto en px/s.
-        // Más rápido = más gotas (entre 4 y 28).
-        const cantidad = Math.round(Phaser.Math.Clamp(intensidad / 12, 4, 28));
+        const cantidad = Math.round(Phaser.Math.Clamp(intensidad / 2, 4, 28));
         this.salpicadura.emitParticleAt(x, y, cantidad);
     }
 
-    // =====================================================
-    // CONSULTAS
-    // =====================================================
-
-    /** Y actual de la superficie en la coordenada X (incluye la ola), o null. */
     alturaSuperficie(x) {
         if (!this.hayAgua) return null;
         const i = Math.floor((x - this.xMin) / this.paso);
@@ -171,18 +144,20 @@ export default class Agua {
     }
 
     /**
-     * Fracción (0 a 1) del AREA del hitbox que está dentro de celdas de agua.
-     * Es el "volumen sumergido" del principio de Arquímedes, en 2D.
-     * Es continua: al entrar al agua sube suavemente de 0 a 1, sin saltos.
+     * Calcula la sumersión continua (0 a 1) usando los límites bounds de Matter.js
      */
     medirSumersion(body) {
         if (!this.hayAgua) return 0;
 
         const tam = this.tam;
-        const izq = body.x;
-        const der = body.x + body.width;
-        const arr = body.y;
-        const aba = body.y + body.height;
+        const izq = body.bounds.min.x;
+        const der = body.bounds.max.x;
+        const arr = body.bounds.min.y;
+        const aba = body.bounds.max.y;
+
+        const ancho = der - izq;
+        const alto = aba - arr;
+        if (ancho <= 0 || alto <= 0) return 0;
 
         const c0 = Math.floor(izq / tam);
         const c1 = Math.ceil(der / tam) - 1;
@@ -201,91 +176,72 @@ export default class Agua {
                 if (x1 > x0) area += (x1 - x0) * (y1 - y0);
             }
         }
-        return Math.min(1, area / (body.width * body.height));
+        return Math.min(1, area / (ancho * alto));
     }
 
-    // =====================================================
-    // FÍSICA SOBRE UN SPRITE (se llama una vez por frame)
-    // =====================================================
-
     /**
-     * Aplica flotabilidad y arrastre a cualquier sprite con cuerpo Arcade.
-     * Deja el resultado en sprite.sumersion (0 a 1) para que el sprite lo use.
-     *
-     * Propiedades opcionales del sprite:
-     *   flotabilidad (default 0.6): densidad_agua / densidad_cuerpo.
-     *       > 1 flota, = 1 queda suspendido, < 1 se hunde.
-     *   arrastreLineal / arrastreCuadratico: para pisar los valores del agua.
+     * Aplica flotabilidad y arrastre a un Sprite de Matter.js
      */
     afectarCuerpo(sprite, tiempo, delta) {
+        if (!sprite || !sprite.body) return;
+
         const body = sprite.body;
-        // Limitamos dt: si la pestaña se congela, un delta gigante rompería la física.
         const dt = Math.min(delta / 1000, 1 / 30);
 
         const s = this.medirSumersion(body);
         const previa = sprite.sumersion ?? 0;
         sprite.sumersion = s;
 
-        const cx = body.center.x;
-        const vyImpacto = body.velocity.y;
+        const cx = sprite.x;
+        const vy = body.velocity.y;
 
-        // ---- Eventos de ENTRADA / SALIDA (cruce del umbral 0.02) ----
-        if (previa < 0.02 && s >= 0.02 && vyImpacto > 40) {
-            const ySup = this.alturaSuperficie(cx) ?? body.bottom;
-            this.salpicar(cx, ySup, vyImpacto);
-            this.perturbar(cx, Math.min(vyImpacto * 0.004, 3));
-        } else if (previa >= 0.02 && s < 0.02 && vyImpacto < -80) {
-            const ySup = this.alturaSuperficie(cx) ?? body.bottom;
-            this.salpicar(cx, ySup, Math.abs(vyImpacto) * 0.5);
-            this.perturbar(cx, Math.max(vyImpacto * 0.002, -2));
+        // Disparo de salpicadura al cruzar la superficie
+        if (previa < 0.02 && s >= 0.02 && vy > 1.5) {
+            const ySup = this.alturaSuperficie(cx) ?? body.bounds.max.y;
+            this.salpicar(cx, ySup, vy);
+            this.perturbar(cx, Math.min(vy * 0.4, 3));
+        } else if (previa >= 0.02 && s < 0.02 && vy < -2) {
+            const ySup = this.alturaSuperficie(cx) ?? body.bounds.max.y;
+            this.salpicar(cx, ySup, Math.abs(vy) * 0.4);
+            this.perturbar(cx, Math.max(vy * 0.2, -2));
         }
 
         if (s <= 0) return;
 
-        // ---- 1. FLOTABILIDAD (Arquímedes) ----
-        // Empuje hacia arriba = g * k * s. La gravedad del mundo ya empujó hacia
-        // abajo con g durante el paso de física, así que la aceleración neta es
-        // g * (1 - k*s):
-        //   k*s < 1 -> se hunde | k*s = 1 -> equilibrio | k*s > 1 -> sube.
-        // Con k = 1.12 el equilibrio está en s = 1/1.12 = ~89% sumergido: flota
-        // con el lomo y la cabeza afuera, solo.
-        if (body.allowGravity) {
-            const g = this.escena.physics.world.gravity.y + body.gravity.y;
-            const k = sprite.flotabilidad ?? 0.6;
-            body.velocity.y -= g * k * s * dt;
-        }
+        // 1. FLOTABILIDAD (Principio de Arquímedes con applyForce en Matter)
+        // Matter aplica la gravedad a cada cuerpo como: masa * gravedad.y * gravedad.scale.
+        // El empuje usa EXACTAMENTE la misma fórmula, multiplicada por k * s, para que
+        // al sumergirse a s = 1/k empuje y peso se anulen (equilibrio).
 
-        // ---- 2. ARRASTRE ----
-        // dv/dt = -(cLin + cCuad*|v|) * s * v. Se resuelve de forma IMPLÍCITA
-        // (v / (1 + c*dt)): nunca invierte ni amplifica la velocidad, por alto que
-        // sea dt, a diferencia de v -= c*v*dt que explota con pasos grandes.
-        const cLin = sprite.arrastreLineal ?? this.arrastreLineal;
-        const cCuad = sprite.arrastreCuadratico ?? this.arrastreCuadratico;
-        const rapidez = Math.hypot(body.velocity.x, body.velocity.y);
-        const c = (cLin + cCuad * rapidez) * s;
-        body.velocity.x /= 1 + c * dt;
-        body.velocity.y /= 1 + c * this.factorArrastreVertical * dt;
+        const motor = this.escena.matter.world.engine;
+        const gravedad = motor.gravity ?? motor.world?.gravity;   // según versión de Matter
+        const gy = gravedad?.y ?? 1;
+        const escalaGravedad = gravedad?.scale ?? 0.001;
+        const kFlotabilidad = sprite.flotabilidad ?? 1.15;
 
-        // ---- 3. Ondas mientras el cuerpo atraviesa la superficie ----
-        // Si está a medias (0.02 < s < 0.98): moverse en vertical empuja el agua y
-        // el palmeo horizontal genera ondas pequeñas que oscilan.
+        const fuerzaEmpuje = body.mass * gy * escalaGravedad * kFlotabilidad * s;
+        sprite.applyForce({ x: 0, y: -fuerzaEmpuje });
+
+        // 2. ARRASTRE FLUIDO (Resistencia al avance)
+        const factorFrenadoX = 1 / (1 + this.arrastreLineal * s * dt * 2.5);
+        const factorFrenadoY = 1 / (1 + this.arrastreLineal * this.factorArrastreVertical * s * dt * 3.0);
+
+        sprite.setVelocity(
+            body.velocity.x * factorFrenadoX,
+            body.velocity.y * factorFrenadoY
+        );
+
+        // 3. Pequeñas ondas al moverse por la superficie
         if (s > 0.02 && s < 0.98) {
-            const vertical = body.velocity.y * 0.0008;
-            const palmeo = Math.sin(tiempo * 0.015) * Math.abs(body.velocity.x) * 0.0006;
+            const vertical = body.velocity.y * 0.08;
+            const palmeo = Math.sin(tiempo * 0.015) * Math.abs(body.velocity.x) * 0.04;
             this.perturbar(cx, vertical + palmeo);
         }
     }
 
-    // =====================================================
-    // OLAS
-    // =====================================================
-
-    /** Da un empujón a la superficie en X (fuerza + = hunde, - = levanta). */
     perturbar(x, fuerza) {
         if (!this.hayAgua) return;
         const centro = Math.round((x - this.xMin) / this.paso);
-        // Reparte la fuerza en 5 tiras con caída lineal: se ve como una ola
-        // suave y no como un pinchazo de un solo punto.
         for (let d = -2; d <= 2; d++) {
             const i = centro + d;
             if (i < 0 || i >= this.n || !this.activo[i]) continue;
@@ -293,19 +249,15 @@ export default class Agua {
         }
     }
 
-    /** Un tick de simulación: resortes + contagio entre vecinos. */
     _pasoOnda() {
         const { n, altura: h, velocidad: v, activo, dIzq, dDer } = this;
 
-        // (a) Cada punto es un resorte amortiguado hacia su altura de reposo (h=0).
         for (let i = 0; i < n; i++) {
             if (!activo[i]) continue;
             v[i] += -this.tension * h[i] - this.amortiguacion * v[i];
             h[i] += v[i];
         }
 
-        // (b) Contagio: cada punto arrastra a sus vecinos hacia su altura.
-        // Esto es lo que hace que la onda VIAJE por la laguna.
         for (let p = 0; p < this.pasadasPropagacion; p++) {
             for (let i = 0; i < n; i++) {
                 if (!activo[i]) continue;
@@ -330,19 +282,14 @@ export default class Agua {
         }
     }
 
-    /** Ondulación suave permanente (solo visual, no entra en la simulación). */
     _ambiente(x, tiempo) {
         return Math.sin(tiempo * 0.002 + x * 0.05) * 0.8 +
             Math.sin(tiempo * 0.0013 - x * 0.021) * 0.6;
     }
 
-    // =====================================================
-    // ACTUALIZACIÓN + DIBUJO (una vez por frame)
-    // =====================================================
     actualizar(tiempo, delta) {
         if (!this.hayAgua) return;
 
-        // Paso fijo de 1/60 s: la ola se comporta igual a 30, 60 o 144 FPS.
         this.acumulador += Math.min(delta / 1000, 0.1);
         let pasos = 0;
         while (this.acumulador >= 1 / 60 && pasos < 5) {
@@ -359,22 +306,17 @@ export default class Agua {
         const { n, paso, xMin, activo, altura, colTira, corridas, base, fondo, alturaVertice: vh, fondoVertice: fvh } = this;
         g.clear();
 
-        // 1. Suavizar tanto la cima como el fondo promediando vértices adyacentes
         for (let j = 0; j <= n; j++) {
-            // Superficie
             const a = j > 0 && activo[j - 1] ? altura[j - 1] : null;
             const b = j < n && activo[j] ? altura[j] : null;
             vh[j] = a !== null && b !== null ? (a + b) / 2 : (a ?? b ?? 0);
 
-            // Fondo de la laguna (elimina los escalones cuadrados)
             const fa = j > 0 && activo[j - 1] ? fondo[j - 1] : null;
             const fb = j < n && activo[j] ? fondo[j] : null;
             fvh[j] = fa !== null && fb !== null ? (fa + fb) / 2 : (fa ?? fb ?? 0);
         }
 
-        // 2. Relleno líquido que une los vértices suaves
         g.fillStyle(this.colorAgua, this.alphaAgua);
-        // 2. Relleno líquido que une los vértices suaves
         for (let i = 0; i < n; i++) {
             if (!activo[i]) continue;
             const x0 = xMin + i * paso;
@@ -382,13 +324,12 @@ export default class Agua {
 
             const tI = base[i] + vh[i] + this._ambiente(x0, tiempo);
             const tD = base[i] + vh[i + 1] + this._ambiente(x1, tiempo);
-            const bI = fvh[i];     // Fondo suave izquierda
-            const bD = fvh[i + 1]; // Fondo suave derecha
+            const bI = fvh[i];
+            const bD = fvh[i + 1];
 
             this.cimaIzq[i] = tI;
             this.cimaDer[i] = tD;
 
-            // 👉 RETOQUE SUTIL: si es la orilla extrema, desvanece el alfa para que no corte en seco
             const esBorde = (i === 0 || !activo[i - 1] || i === n - 1 || !activo[i + 1]);
             g.fillStyle(this.colorAgua, esBorde ? this.alphaAgua * 0.4 : this.alphaAgua);
 
@@ -400,14 +341,12 @@ export default class Agua {
             g.closePath();
             g.fillPath();
 
-            // Corridas de agua profunda adicionales (si existieran)
             const lista = corridas[colTira[i]];
             for (let r = 1; r < lista.length; r++) {
                 g.fillRect(x0, lista[r].arriba, paso, lista[r].abajo - lista[r].arriba);
             }
         }
 
-        // 3. Línea de brillo en la superficie
         g.lineStyle(2, 0xffffff, 0.75);
         let trazando = false;
         for (let i = 0; i < n; i++) {
